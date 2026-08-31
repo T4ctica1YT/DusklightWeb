@@ -1,0 +1,369 @@
+<!doctypehtml><html lang=en-us><head><meta charset=utf-8><meta content="text/html; charset=utf-8"http-equiv=Content-Type><meta content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"name=viewport><title>Dusklight</title>
+<script src=coi-serviceworker.js></script>
+<style>
+:root{--bg:#000;--panel:#16141a;--panel-2:#1d1a23;--border:#2b2733;--text:#d8d3c8;--dim:#8b8576;--gold:#c8a24a;--gold-dim:#8a7136;--error:#d06a5a}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;padding:0;height:100%;background:var(--bg);overflow:hidden;font-family:ui-sans-serif,system-ui,sans-serif;color:var(--text)}
+button{font:inherit;cursor:pointer}
+
+/* --- The game frame is the entire page --- */
+#frame{position:fixed;inset:0;background:#000;display:flex;align-items:center;justify-content:center}
+
+/* --- Canvas: forced 4:3 letterboxed when windowed, fills the monitor when fullscreen --- */
+canvas#canvas{background:#000;border:0;outline:0;display:block;
+  aspect-ratio:4/3;width:auto;height:auto;max-width:100%;max-height:100%}
+#frame:fullscreen{background:#000}
+#frame:fullscreen canvas#canvas{aspect-ratio:auto;width:100vw;height:100vh;max-width:none;max-height:none}
+
+/* --- Status / progress overlay: centered, only visible while loading or on error --- */
+#status{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+  color:var(--text);font-size:14px;text-align:center;max-width:80vw;pointer-events:none;
+  text-shadow:0 1px 4px rgba(0,0,0,.9);z-index:6}
+#status:empty{display:none}
+#status.error{color:var(--error);pointer-events:auto}
+#status b{color:#fff}
+progress#copy-progress{position:fixed;left:50%;top:calc(50% + 26px);transform:translateX(-50%);
+  width:min(360px,70vw);accent-color:var(--gold);z-index:6}
+
+/* --- Small floating icon buttons, unobtrusive --- */
+button.icon-btn{position:fixed;z-index:10;min-width:42px;min-height:42px;
+  background:rgba(20,18,24,.45);color:var(--text);border:1px solid rgba(200,162,74,.35);border-radius:8px;
+  font-size:17px;opacity:.55;transition:opacity .15s,border-color .15s,color .15s}
+button.icon-btn:hover,button.icon-btn.active{opacity:1;border-color:var(--gold);color:var(--gold)}
+#fullscreen{top:calc(10px + env(safe-area-inset-top));right:calc(10px + env(safe-area-inset-right))}
+#touch-toggle{top:calc(10px + env(safe-area-inset-top));right:calc(60px + env(safe-area-inset-right))}
+#console-btn{top:calc(10px + env(safe-area-inset-top));left:calc(10px + env(safe-area-inset-left))}
+#controls-btn{top:calc(10px + env(safe-area-inset-top));left:calc(60px + env(safe-area-inset-left))}
+#frame:fullscreen ~ button.icon-btn{opacity:0}
+#frame:fullscreen ~ button.icon-btn:hover{opacity:1}
+
+/* --- Touch controls (unchanged from stock layout) --- */
+#touch-overlay{position:absolute;inset:0;pointer-events:none;font-family:inherit;-webkit-user-select:none;user-select:none}
+.t-ctl{position:absolute;pointer-events:auto;touch-action:none;display:flex;align-items:center;justify-content:center;
+  border-radius:50%;border:2px solid rgba(200,162,74,.55);background:rgba(22,20,26,.35);color:rgba(216,211,200,.9);
+  font-weight:700;line-height:normal;-webkit-tap-highlight-color:transparent}
+.t-ctl.pressed{background:rgba(200,162,74,.45);color:#1a1408}
+#t-stick-zone{left:3%;bottom:6%;width:clamp(96px,26%,180px);aspect-ratio:1;border-radius:50%}
+#t-stick-nub{position:absolute;width:44%;aspect-ratio:1;border-radius:50%;background:rgba(200,162,74,.5);border:2px solid rgba(200,162,74,.8);left:28%;top:28%;pointer-events:none}
+.t-btn{width:clamp(46px,11%,72px);aspect-ratio:1;font-size:clamp(14px, 2.4vw, 18px)}
+#t-a{right:4%;bottom:14%;width:clamp(56px,14%,88px)}
+#t-b{right:17%;bottom:5%}
+#t-x{right:16.5%;bottom:27%}
+#t-y{right:28%;bottom:16%}
+#t-z{right:20%;top:4%;background:rgba(70,60,110,.45)}
+#t-cstick-zone{right:4%;bottom:42%;width:clamp(72px,18%,130px);aspect-ratio:1;border-radius:50%;border-color:rgba(196,196,90,.5)}
+#t-cstick-nub{position:absolute;width:44%;aspect-ratio:1;border-radius:50%;background:rgba(196,196,90,.45);border:2px solid rgba(196,196,90,.75);left:28%;top:28%;pointer-events:none}
+#t-l{left:2.5%;top:4%;border-radius:12px;width:clamp(56px,15%,96px);aspect-ratio:2.1}
+#t-r{right:2.5%;top:4%;border-radius:12px;width:clamp(56px,15%,96px);aspect-ratio:2.1}
+#t-start{left:50%;transform:translateX(-50%);bottom:4%;border-radius:12px;width:clamp(64px,16%,104px);aspect-ratio:2.6;font-size:12px;letter-spacing:.08em}
+
+/* --- Console & Controls panels --- */
+.backdrop{position:fixed;inset:0;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px}
+.panel{width:min(94vw,580px);max-height:min(86vh,720px);display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.panel header{display:flex;align-items:center;gap:12px;margin:0;padding:14px 16px;border-bottom:1px solid var(--border)}
+.panel header button.icon-btn{position:static;min-width:36px;min-height:36px;opacity:1}
+.panel header h2{margin:0;font-size:16px;color:var(--gold);letter-spacing:.06em}
+.panel .body{padding:12px 16px;overflow-y:auto}
+.panel footer{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;padding:12px 16px;border-top:1px solid var(--border)}
+.panel-note{color:var(--dim);font-size:13px;margin:10px 0 0}
+.btn-ghost{background:0 0;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 14px;min-height:38px}
+.btn-ghost:hover{border-color:var(--gold-dim);color:var(--gold)}
+.bind-section{margin:10px 0 4px;color:var(--gold-dim);font-size:12px;letter-spacing:.1em;text-transform:uppercase}
+.bind-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 4px;border-bottom:1px solid rgba(43,39,51,.5)}
+.bind-row label{flex:1}
+.bind-key{min-width:130px;min-height:38px;text-align:center;background:var(--panel-2);border:1px solid var(--border);color:var(--gold);border-radius:6px;padding:6px 10px;font:13px ui-monospace,monospace}
+.bind-key.capturing{border-color:var(--gold);color:var(--text);animation:pulse 1s infinite}
+@keyframes pulse{50%{background:rgba(200,162,74,.18)}}
+pre#log-content{margin:0;padding:0;max-height:60vh;overflow-y:auto;color:var(--dim);font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap;word-break:break-all}
+#capture-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;z-index:60;color:var(--text)}
+</style></head><body>
+<div id=frame>
+<canvas height=720 id=canvas oncontextmenu=event.preventDefault() tabindex=-1 width=960></canvas>
+<div id=touch-overlay hidden>
+<div id=t-stick-zone class=t-ctl><div id=t-stick-nub></div></div>
+<div id=t-cstick-zone class=t-ctl><div id=t-cstick-nub></div></div>
+<div id=t-l class="t-ctl t-btn"data-mask=64>L</div>
+<div id=t-r class="t-ctl t-btn"data-mask=32>R</div>
+<div id=t-z class="t-ctl t-btn"data-mask=16>Z</div>
+<div id=t-a class="t-ctl t-btn"data-mask=256>A</div>
+<div id=t-b class="t-ctl t-btn"data-mask=512>B</div>
+<div id=t-x class="t-ctl t-btn"data-mask=1024>X</div>
+<div id=t-y class="t-ctl t-btn"data-mask=2048>Y</div>
+<div id=t-start class="t-ctl t-btn"data-mask=4096>START</div>
+</div>
+</div>
+<button class=icon-btn id=console-btn title=Console>&#9776;</button>
+<button class=icon-btn id=controls-btn title=Controls>&#8963;</button>
+<button class=icon-btn id=fullscreen title=Fullscreen>⛶</button>
+<button class=icon-btn id=touch-toggle title="Touch controls">📱</button>
+<div id=status></div>
+<progress hidden id=copy-progress max=100 value=0></progress>
+
+<div id=console-backdrop class=backdrop hidden><div class=panel aria-label=Console role=dialog>
+<header><button class=icon-btn id=console-close title=Close>✕</button><h2>Console</h2></header>
+<div class=body><pre id=log-content></pre></div>
+<footer><button class=btn-ghost id=console-export>Export</button><button class=btn-ghost id=console-clear>Clear</button></footer>
+</div></div>
+
+<div id=controls-backdrop class=backdrop hidden><div class=panel aria-label=Controls role=dialog>
+<header><button class=icon-btn id=controls-close title=Close>✕</button><h2>Keyboard & Mouse</h2></header>
+<div class=body><div id=bind-list></div>
+<p class=panel-note>Click a binding, then press a key or mouse button. <b>Esc</b> cancels. The mouse always controls the camera and aiming.</p>
+<p class=panel-note hidden id=controls-running-note>The game is running: changes apply the next time the page is reloaded.</p></div>
+<footer><button class=btn-ghost id=controls-reset>Reset to defaults</button> <button class=btn-ghost id=controls-save>Save</button></footer>
+</div></div>
+<div id=capture-overlay hidden>Press a key or mouse button… (Esc to cancel)</div>
+
+<script>"use strict";
+var PARTS_DIR="parts/",PARTS_PREFIX="twilight.ciso.part";
+var canvasElement=document.getElementById("canvas"),gameFrameElement=document.getElementById("frame"),
+statusElement=document.getElementById("status"),progressElement=document.getElementById("copy-progress"),
+fullscreenElement=document.getElementById("fullscreen"),logContentElement=document.getElementById("log-content"),
+runtimeReady=!1,started=!1,failed=!1,USER_DIR="/libsdl/TwilitRealm/Dusklight";
+
+function appendLog(e){logContentElement.textContent+=e+"\n",logContentElement.textContent.length>262144&&(logContentElement.textContent=logContentElement.textContent.slice(-131072)),logContentElement.scrollTop=logContentElement.scrollHeight}
+function setStatusText(e,t){statusElement.innerHTML=e||"",statusElement.classList.toggle("error",!!t)}
+function showError(e){failed=!0,progressElement.hidden=!0,setStatusText(e,!0),appendLog(e.replace(/<[^>]+>/g,"")),console.error(e)}
+
+function checkRequirements(){
+  if(!navigator.gpu){showError("<b>WebGPU is not available.</b> Use a current version of Chrome or Edge (and make sure WebGPU is not disabled in the browser flags).");return!1}
+  if(!window.crossOriginIsolated){
+    if(window.__coiFixing){setStatusText("Preparing this page&hellip;");return!1}
+    showError("<b>This page could not become cross-origin isolated</b>, so SharedArrayBuffer is unavailable. This needs a secure context (<code>https://</code> or <code>http://localhost</code>) with Service Workers enabled.");
+    return!1
+  }
+  if(typeof WebAssembly.Suspending!="function"){showError("<b>This browser does not support WebAssembly JSPI yet</b>, which Dusklight requires. Use a current Chrome or Edge. Safari support arrives with Safari 27 (on iPhone/iPad every browser uses WebKit, so an iOS with Safari 27 is needed).");return!1}
+  return!0
+}
+checkRequirements()&&setStatusText("Loading runtime&hellip;");
+
+var BUTTON_IDS=[256,512,1024,2048,4096,16,64,32,8,4,1,2],AXIS_IDS=[0,1,2,3,4,5,6,7,8,9],
+DEFAULT_BUTTONS=[44,-2,8,20,40,43,-4,225,82,81,80,79],DEFAULT_AXES=[7,4,26,22,-1,-1,-1,-1,-4,225],
+BINDINGS_KEY="dusklight.bindings.v1";
+function loadBindings(){try{var e=localStorage.getItem(BINDINGS_KEY);if(e){var t=JSON.parse(e);if(Array.isArray(t.buttons)&&12===t.buttons.length&&Array.isArray(t.axes)&&10===t.axes.length)return t}}catch(e){}return{buttons:DEFAULT_BUTTONS.slice(),axes:DEFAULT_AXES.slice()}}
+var bindings=loadBindings();
+function buildKbnd(e){var t=new ArrayBuffer(740),n=new DataView(t);n.setUint8(0,75),n.setUint8(1,66),n.setUint8(2,78),n.setUint8(3,68),n.setInt32(4,3,!0);for(var a=32,i=0;i<4;i++){var o=0===i;n.setUint8(a,o?1:0),a+=1;for(var r=0;r<12;r++)n.setInt32(a,o?e.buttons[r]:-1,!0),n.setUint16(a+4,BUTTON_IDS[r],!0),a+=8;for(var s=0;s<10;s++)n.setInt32(a,o?e.axes[s]:-1,!0),n.setUint16(a+4,AXIS_IDS[s],!0),n.setInt16(a+6,0,!0),a+=8}return new Uint8Array(t)}
+
+var CODE_TO_SCANCODE=function(){for(var e={Enter:40,Escape:41,Backspace:42,Tab:43,Space:44,Minus:45,Equal:46,BracketLeft:47,BracketRight:48,Backslash:49,Semicolon:51,Quote:52,Backquote:53,Comma:54,Period:55,Slash:56,CapsLock:57,PrintScreen:70,ScrollLock:71,Pause:72,Insert:73,Home:74,PageUp:75,Delete:76,End:77,PageDown:78,ArrowRight:79,ArrowLeft:80,ArrowDown:81,ArrowUp:82,ControlLeft:224,ShiftLeft:225,AltLeft:226,MetaLeft:227,ControlRight:228,ShiftRight:229,AltRight:230,MetaRight:231},t=0;t<26;t++)e["Key"+String.fromCharCode(65+t)]=4+t;for(var n=1;n<=9;n++)e["Digit"+n]=29+n;e.Digit0=39;for(var a=1;a<=12;a++)e["F"+a]=57+a;return e}(),
+SCANCODE_NAMES=function(){var e={"-1":"—","-2":"Left Click","-3":"Middle Click","-4":"Right Click","-5":"Mouse 4","-6":"Mouse 5"};for(var t in CODE_TO_SCANCODE)e[CODE_TO_SCANCODE[t]]=t.replace(/^Key/,"").replace(/^Digit/,"").replace(/^Arrow/,"").replace("Left"," Left").replace("Right"," Right").trim();return e[44]="Space",e[40]="Enter",e[43]="Tab",e}();
+function scancodeName(e){return SCANCODE_NAMES[e]||"scan "+e}
+
+function ensureDir(e){for(var t=e.split("/").filter(Boolean),n="",a=0;a<t.length;a++){n+="/"+t[a];try{Module.FS.mkdir(n)}catch(e){}}}
+var persistenceReady=!1;
+function setupPersistence(){return new Promise((function(e){try{ensureDir(USER_DIR),Module.FS.mount(Module.IDBFS,{},USER_DIR),Module.FS.syncfs(!0,(function(t){t&&console.error("IDBFS populate failed:",t),persistenceReady=!t,e()}))}catch(t){console.error("IDBFS mount failed:",t),e()}}))}
+function persist(){if(persistenceReady)try{Module.FS.syncfs(!1,(function(e){e&&console.error("syncfs:",e)}))}catch(e){}}
+function seedUserData(){ensureDir(USER_DIR),Module.FS.writeFile(USER_DIR+"/keyboard_bindings.dat",buildKbnd(bindings));var e=!1;try{Module.FS.stat(USER_DIR+"/config.json"),e=!0}catch(e){}e||Module.FS.writeFile(USER_DIR+"/config.json",JSON.stringify({"backend.wasPresetChosen":!0,"backend.isoVerification":0,"game.enableMouseAim":!0,"game.enableMouseCamera":!0}))}
+setInterval(persist,15e3),document.addEventListener("visibilitychange",(function(){"hidden"===document.visibilityState&&persist()}));
+
+var Module={canvas:canvasElement,
+print(...e){console.log(...e),appendLog(e.join(" "))},
+printErr(...e){console.error(...e),appendLog(e.join(" "))},
+onRuntimeInitialized(){failed||setupPersistence().then((function(){runtimeReady=!0,autoLoadDump()}))},
+onAbort(e){showError("<b>Runtime aborted:</b> "+e+" &mdash; see the Console.")},
+setStatus(e){failed||runtimeReady||!e||setStatusText("Loading runtime&hellip; "+e)},
+totalDependencies:0,
+monitorRunDependencies(e){this.totalDependencies=Math.max(this.totalDependencies,e),failed||runtimeReady||!e||setStatusText("Loading runtime&hellip; ("+(this.totalDependencies-e)+"/"+this.totalDependencies+")")}};
+
+function launchGame(e){
+  Module.FS.writeFile("/game.ciso",e),progressElement.hidden=!0,setStatusText("");
+  document.getElementById("controls-running-note").hidden=!1;
+  applyTouchVisibility(),canvasElement.focus();
+  try{
+    seedUserData();
+    var t=Module.callMain(["--dvd","/game.ciso"]);
+    t instanceof Promise&&t.catch((function(e){console.error(e),showError("<b>Runtime error:</b> "+e+" &mdash; see the Console.")}));
+    setTimeout(persist,5e3)
+  }catch(e){console.error(e),showError("<b>Runtime error:</b> "+e+" &mdash; see the Console.")}
+}
+
+/* --- Assemble twilight.ciso from /parts/twilight.ciso.part01, .part02, … --- */
+/* Parts are numbered with a zero-padded 2+ digit suffix (01, 02, … 10, 11, …). */
+function partNum(e){return String(e).padStart(2,"0")}
+var PART_CONCURRENCY=4; /* parts are ~100MB each and same-origin, so fetch several in parallel */
+
+/* Cheap discovery pass using HEAD requests, so we know the exact byte offsets
+   and total size up front (parts are all roughly the same size, just under 100MB). */
+async function discoverPartsByHead(){
+  var parts=[],idx=1;
+  for(;;){
+    var url=PARTS_DIR+PARTS_PREFIX+partNum(idx),head;
+    try{head=await fetch(url,{method:"HEAD"})}catch(e){head=null}
+    if(!head||!head.ok)break;
+    parts.push({url:url,size:Number(head.headers.get("Content-Length"))||0});
+    idx++
+  }
+  return parts
+}
+
+/* Fallback used only if HEAD requests aren't usable on this server (or sizes are
+   unreported): discovers and downloads parts sequentially via plain GET. */
+async function downloadPartsSequential(){
+  var chunks=[],totalLoaded=0,partIndex=1;
+  for(;;){
+    var url=PARTS_DIR+PARTS_PREFIX+partNum(partIndex),resp;
+    setStatusText("Locating part "+partNum(partIndex)+"&hellip;");
+    try{resp=await fetch(url)}catch(e){resp=null}
+    if(!resp||!resp.ok){
+      if(partIndex===1)throw new Error("No parts found at "+url+" (expected "+PARTS_PREFIX+"01, "+PARTS_PREFIX+"02, &hellip;)");
+      break
+    }
+    var partSize=Number(resp.headers.get("Content-Length"))||0;
+    if(resp.body){
+      var reader=resp.body.getReader(),partLoaded=0,buf=partSize?new Uint8Array(partSize):null,arr=buf?null:[];
+      for(;;){
+        var res=await reader.read();
+        if(res.done)break;
+        buf?buf.set(res.value,partLoaded):arr.push(res.value);
+        partLoaded+=res.value.length,totalLoaded+=res.value.length;
+        setStatusText("Downloading part "+partNum(partIndex)+"&hellip; ("+(totalLoaded/1048576).toFixed(1)+" MB)");
+        if(partSize)progressElement.value=Math.floor(partLoaded/partSize*100)
+      }
+      if(!buf){buf=new Uint8Array(partLoaded);var o=0;for(var v of arr){buf.set(v,o),o+=v.length}}
+      else buf=buf.subarray(0,partLoaded);
+      chunks.push(buf)
+    }else{
+      var ab=new Uint8Array(await resp.arrayBuffer());
+      totalLoaded+=ab.length,chunks.push(ab);
+      setStatusText("Downloading part "+partNum(partIndex)+"&hellip; ("+(totalLoaded/1048576).toFixed(1)+" MB)")
+    }
+    partIndex++
+  }
+  var combined=new Uint8Array(totalLoaded),off=0;
+  for(var c of chunks)combined.set(c,off),off+=c.length;
+  return combined
+}
+
+/* Preferred path: sizes are known up front, so download several parts in
+   parallel and write each straight into its final offset in one preallocated
+   buffer — no re-copying, no waiting on earlier parts to finish first. */
+async function downloadPartsParallel(parts){
+  var total=parts.reduce((function(s,p){return s+p.size}),0);
+  var combined=new Uint8Array(total),offsets=[],acc=0;
+  parts.forEach((function(p){offsets.push(acc),acc+=p.size}));
+  var totalLoaded=0,nextIndex=0,concurrency=Math.min(PART_CONCURRENCY,parts.length);
+  progressElement.value=0;
+  async function worker(){
+    for(;;){
+      var i=nextIndex++;
+      if(i>=parts.length)return;
+      var part=parts[i],resp=await fetch(part.url);
+      if(!resp.ok)throw new Error("HTTP "+resp.status+" fetching "+part.url);
+      var reader=resp.body.getReader(),pos=offsets[i];
+      for(;;){
+        var res=await reader.read();
+        if(res.done)break;
+        combined.set(res.value,pos),pos+=res.value.length,totalLoaded+=res.value.length;
+        progressElement.value=Math.floor(totalLoaded/total*100);
+        setStatusText("Downloading "+parts.length+" parts&hellip; ("+(totalLoaded/1048576).toFixed(1)+" / "+(total/1048576).toFixed(1)+" MB)")
+      }
+    }
+  }
+  var workers=[];
+  for(var w=0;w<concurrency;w++)workers.push(worker());
+  await Promise.all(workers);
+  return combined
+}
+
+async function autoLoadDump(){
+  if(started||failed)return;
+  started=!0;
+  try{
+    progressElement.hidden=!1,progressElement.value=0;
+    setStatusText("Locating disc parts&hellip;");
+    var parts=await discoverPartsByHead(),combined;
+    if(parts.length&&parts.every((function(p){return p.size>0}))){
+      setStatusText("Found "+parts.length+" parts&hellip;");
+      combined=await downloadPartsParallel(parts)
+    }else{
+      combined=await downloadPartsSequential()
+    }
+    setStatusText("Assembling disc image ("+(combined.length/1048576).toFixed(1)+" MB)&hellip;");
+    launchGame(combined)
+  }catch(e){
+    console.error(e),started=!1,progressElement.hidden=!0;
+    setStatusText("<b>Could not load disc parts:</b> "+e+" &mdash; place "+PARTS_PREFIX+"01, "+PARTS_PREFIX+"02, &hellip; in a /"+PARTS_DIR+" folder next to this page.",!0)
+  }
+}
+
+window.addEventListener("error",(function(e){failed||started||showError("<b>Unhandled exception:</b> "+e.message+" &mdash; see the Console.")})),
+window.addEventListener("unhandledrejection",(function(e){failed||started||showError("<b>Unhandled exception:</b> "+(e.reason&&e.reason.message||e.reason)+" &mdash; see the Console.")}));
+
+/* --- Fullscreen toggle: windowed = forced 4:3 canvas; fullscreen = fills the monitor --- */
+fullscreenElement.addEventListener("click",(function(){
+  if(document.fullscreenElement){document.exitFullscreen().catch((function(){}));return}
+  gameFrameElement.requestFullscreen().then((function(){canvasElement.focus()})).catch((function(e){console.error("fullscreen failed:",e)}))
+}));
+document.addEventListener("fullscreenchange",(function(){fullscreenElement.classList.toggle("active",!!document.fullscreenElement)}));
+
+/* --- Console panel --- */
+document.getElementById("console-btn").addEventListener("click",(function(){document.getElementById("console-backdrop").hidden=!1}));
+document.getElementById("console-close").addEventListener("click",(function(){document.getElementById("console-backdrop").hidden=!0}));
+document.getElementById("console-clear").addEventListener("click",(function(){logContentElement.textContent=""}));
+document.getElementById("console-export").addEventListener("click",(function(){
+  var blob=new Blob([logContentElement.textContent],{type:"text/plain"}),url=URL.createObjectURL(blob),a=document.createElement("a");
+  a.href=url,a.download="dusklight-console-"+(new Date).toISOString().replace(/[:.]/g,"-")+".txt",a.click(),URL.revokeObjectURL(url)
+}));
+
+/* --- Controls panel (keyboard/mouse rebinding) --- */
+var BIND_ROWS=[{section:"Movement"},{kind:"axis",idx:2,label:"Move Up"},{kind:"axis",idx:3,label:"Move Down"},{kind:"axis",idx:1,label:"Move Left"},{kind:"axis",idx:0,label:"Move Right"},{section:"Actions"},{kind:"button",idx:0,label:"A — Action / Roll"},{kind:"button",idx:1,label:"B — Sword"},{kind:"button",idx:2,label:"X — Item"},{kind:"button",idx:3,label:"Y — Item"},{kind:"button",idx:6,label:"L — Target lock"},{kind:"button",idx:7,label:"R — Shield"},{kind:"button",idx:5,label:"Z — Map / Midna"},{kind:"button",idx:4,label:"Start — Pause"},{section:"D-Pad"},{kind:"button",idx:8,label:"D-Pad Up"},{kind:"button",idx:9,label:"D-Pad Down"},{kind:"button",idx:10,label:"D-Pad Left"},{kind:"button",idx:11,label:"D-Pad Right"}],pendingBindings=null,captureRow=null;
+function getBind(e,t){return"axis"===t.kind?e.axes[t.idx]:e.buttons[t.idx]}
+function setBind(e,t,n){"axis"===t.kind?e.axes[t.idx]=n:e.buttons[t.idx]=n}
+function renderBindList(){var e=document.getElementById("bind-list");e.textContent="",BIND_ROWS.forEach((function(t){if(t.section){var n=document.createElement("div");return n.className="bind-section",n.textContent=t.section,void e.appendChild(n)}var a=document.createElement("div");a.className="bind-row";var i=document.createElement("label");i.textContent=t.label;var o=document.createElement("button");o.className="bind-key",o.textContent=scancodeName(getBind(pendingBindings,t)),o.addEventListener("click",(function(){startCapture(t,o)})),a.appendChild(i),a.appendChild(o),e.appendChild(a)}))}
+function startCapture(e,t){captureRow=e,t.classList.add("capturing"),t.textContent="…",document.getElementById("capture-overlay").hidden=!1}
+function finishCapture(e){document.getElementById("capture-overlay").hidden=!0,captureRow&&null!==e&&(BIND_ROWS.forEach((function(t){t.section||t===captureRow||getBind(pendingBindings,t)!==e||setBind(pendingBindings,t,-1)})),setBind(pendingBindings,captureRow,e)),captureRow=null,renderBindList()}
+function openControlsModal(){pendingBindings={buttons:bindings.buttons.slice(),axes:bindings.axes.slice()},renderBindList(),document.getElementById("controls-backdrop").hidden=!1}
+function closeControlsModal(){document.getElementById("controls-backdrop").hidden=!0,finishCapture(null)}
+window.addEventListener("keydown",(function(e){if(captureRow)if(e.preventDefault(),e.stopPropagation(),"Escape"!==e.code){var t=CODE_TO_SCANCODE[e.code];finishCapture(void 0!==t?t:null)}else finishCapture(null)}),!0);
+document.getElementById("capture-overlay").addEventListener("mousedown",(function(e){if(captureRow){e.preventDefault();var t=[-2,-3,-4,-5,-6][e.button];finishCapture(void 0!==t?t:null)}}));
+document.getElementById("capture-overlay").addEventListener("contextmenu",(function(e){e.preventDefault()}));
+document.getElementById("controls-btn").addEventListener("click",openControlsModal);
+document.getElementById("controls-close").addEventListener("click",closeControlsModal);
+document.getElementById("controls-reset").addEventListener("click",(function(){pendingBindings={buttons:DEFAULT_BUTTONS.slice(),axes:DEFAULT_AXES.slice()},renderBindList()}));
+document.getElementById("controls-save").addEventListener("click",(function(){if(pendingBindings.axes[8]=pendingBindings.buttons[6],pendingBindings.axes[9]=pendingBindings.buttons[7],bindings=pendingBindings,localStorage.setItem(BINDINGS_KEY,JSON.stringify(bindings)),runtimeReady&&!started)try{seedUserData(),persist()}catch(e){}closeControlsModal()}));
+
+/* --- Touch controls (unchanged behaviour from stock build) --- */
+/* Mobile controls default OFF; the player has to opt in via the touch-toggle button. */
+var TOUCH_KEY="dusklight.touch",
+touchEnabled=function(){var e=localStorage.getItem(TOUCH_KEY);return"1"===e}(),
+padState={buttons:0,stickX:0,stickY:0,substickX:0,substickY:0};
+function sendPad(){if(started&&Module.ccall){var e=64&padState.buttons?255:0,t=32&padState.buttons?255:0;try{Module.ccall("dusk_web_virtual_pad",null,["number","number","number","number","number","number","number"],[padState.buttons,padState.stickX,padState.stickY,padState.substickX,padState.substickY,e,t])}catch(e){}}}
+function clearPad(){if(started&&Module.ccall)try{Module.ccall("dusk_web_virtual_pad_clear",null,[],[])}catch(e){}}
+function applyTouchVisibility(){document.getElementById("touch-overlay").hidden=!(touchEnabled&&started),document.getElementById("touch-toggle").classList.toggle("active",touchEnabled),touchEnabled||(padState={buttons:0,stickX:0,stickY:0,substickX:0,substickY:0},clearPad())}
+function makeVirtualStick(e,t,n,a,i){var o=document.getElementById(e),r=document.getElementById(t),s=i&&i.invertX?-1:1,d=i&&i.invertY?-1:1,l=null;
+  function c(e){var t=o.getBoundingClientRect(),i=t.left+t.width/2,l=t.top+t.height/2,c=t.width/2,u=e.clientX-i,m=e.clientY-l,p=Math.hypot(u,m);p>c&&(u=u/p*c,m=m/p*c),padState[n]=Math.round(s*(u/c)*127),padState[a]=Math.round(d*(-m/c)*127),r.style.left=28+u/c*28+"%",r.style.top=28+m/c*28+"%",sendPad()}
+  function u(){l=null,padState[n]=0,padState[a]=0,r.style.left="28%",r.style.top="28%",sendPad()}
+  o.addEventListener("pointerdown",(function(e){e.preventDefault(),l=e.pointerId,o.setPointerCapture(e.pointerId),c(e)})),
+  o.addEventListener("pointermove",(function(e){e.pointerId===l&&c(e)})),
+  o.addEventListener("pointerup",(function(e){e.pointerId===l&&u()})),
+  o.addEventListener("pointercancel",(function(e){e.pointerId===l&&u()}))}
+document.getElementById("touch-toggle").addEventListener("click",(function(){touchEnabled=!touchEnabled,localStorage.setItem(TOUCH_KEY,touchEnabled?"1":"0"),applyTouchVisibility()}));
+document.querySelectorAll("#touch-overlay .t-btn").forEach((function(e){var t=parseInt(e.dataset.mask,10);
+  function n(n){e.classList.remove("pressed"),padState.buttons&=~t,sendPad()}
+  e.addEventListener("pointerdown",(function(n){n.preventDefault(),e.setPointerCapture(n.pointerId),e.classList.add("pressed"),padState.buttons|=t,sendPad()})),
+  e.addEventListener("pointerup",n),e.addEventListener("pointercancel",n)}));
+makeVirtualStick("t-stick-zone","t-stick-nub","stickX","stickY"),
+makeVirtualStick("t-cstick-zone","t-cstick-nub","substickX","substickY",{invertX:!0});
+
+/* --- Don't start the wasm runtime until we're actually cross-origin isolated ---
+   On static hosts (no custom headers, e.g. raw.githack.com) coi-serviceworker.js
+   fixes this by registering a Service Worker and reloading the page once. That
+   reload is asynchronous, so if we loaded dusklight.js unconditionally here it
+   could start spawning pthread workers and postMessage()-ing a SharedArrayBuffer
+   *before* the reload lands — which throws "SharedArrayBuffer transfer requires
+   self.crossOriginIsolated". Waiting here instead of racing it fixes that. */
+(function(){
+  function startGame(){var s=document.createElement("script");s.src="dusklight.js",s.async=!0,document.body.appendChild(s)}
+  if(window.crossOriginIsolated){
+    startGame()
+  }else if(window.__coiFixing){
+    /* A fix (Service Worker registration + one reload) is in progress. If it
+       turns out isolation can't be achieved after all, fall back to showing
+       the real diagnostic instead of hanging forever. */
+    window.addEventListener("coi-fix-failed",(function(){checkRequirements()}),{once:!0})
+  }
+  /* else: not isolated and no fix is in progress (insecure context, no Service
+     Worker support, etc.) — checkRequirements() already showed the real error
+     above; loading dusklight.js here would just crash with a confusing one. */
+})();
+</script></body></html>
